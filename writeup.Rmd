@@ -1,0 +1,152 @@
+---
+title: "Practical Machine Learning - Modeling Weight Lifting Mistakes"
+author: "Tyler C"
+date: "May 7, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(caret)
+```
+
+## Introduction
+
+In this project, we use machine learning models to attempt to predict people's activity based on accelerometer data collected from their body. We show that it is possible to achieve reasonably high in-sample and out-of-sample prediction accuracy for a 5-group classification task, using only simple neural network models. Our best model achieves out-of-sample accuracy of 95.3%, using only a single hidden layer of 10 units.
+
+## Data Overview
+
+The data for this project comes from the [Weight Lifting Exercises Dataset](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har). The data consists of accelerometer measurements taken from the belt, forearm, arm, and dumbbell of 6 study participants while they performed exercises.
+
+During the study, each participant performed dumbbell biceps curls in 5 ways, which provide the classes used in the data:
+
+* A: "good" curls
+* B: throwing elbows to the front
+* C: lifting the dumbbell only halfway
+* D: lowering the dumbbell only halfway
+* E: throwing the hips to the front
+
+By taking on this classification task, we answer the question: is it possible to automate detection of common form mistakes during exercise?
+
+## Cleaning and Preparing Data
+
+First, we load the labeled dataset by downloading it from the web, if necessary and reading into R.
+
+```{r}
+data_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+path <- "~/Documents/Coursera Data Science/08 Practical Machine Learning/"
+data_file <- paste(path, "data/pml-training.csv", sep = "")
+
+# Since the data is large, only download and load the data if that's not done yet.
+if(!file.exists(data_file))
+  download.file(data_url, data_file)
+
+## Read the file
+dataset <- read.csv(data_file,
+                    na.strings = c("", "NA"))
+```
+
+Next we check dimensions.
+
+```{r}
+dim(dataset)
+```
+
+We see that the data has a moderate number of rows, and a relatively high number of features (160). Thus, visualizing this dataset is likely to be a challenge, unless we can somehow reduce the number of relevant features.
+
+Since missing values can cause trouble with machine learning algorithms, we inspect this aspect of the data.
+
+```{r}
+test <- function(data) {mean(is.na(data))}
+sum(apply(dataset, 2, test) > 0)
+```
+
+From which we conclude that 100 columns are almost entirely missing values. Since we would likely not gain much by trying to impute so much data, we instead just drop these columns entirely before modeling. There are still too many features for visualization.
+
+```{r}
+good_cols <- dataset[,apply(dataset, 2, test) < 0.1]
+```
+
+As an exploratory step, we look at the remaining column names.
+
+```{r}
+names(good_cols)
+```
+
+Most columns have descriptive names. However, one column is simply named "X". It turns out that this feature is actually a row number. Since the dataset is also ordered by activity class "classe", we must remove column "X". If not, any models would likely just learn the correlation between "X" and "classe", and be entirely useless for data outside of this particular file.
+
+```{r}
+cleaned_data <- select(good_cols, -X)
+```
+
+For this project, we use the Caret library to train machine learning models on the data. Caret's train method automatically applies cross validation to select model parameters, so we
+will only partition our data into "training" and "test" sets, so a final evaluation is possible at the end. The seed is set for reproducibility.
+
+```{r}
+set.seed(123)
+inTrainIndices <- createDataPartition(cleaned_data$classe, p = 0.8, list = F)
+data.train <- cleaned_data[inTrainIndices,]
+data.test <- cleaned_data[-inTrainIndices,]
+```
+
+## Modeling Exercise Class
+
+To model the exercise classes appearing in the dataset, we choose to use neural net models. Neural nets provide a powerful nonlinear model, which is useful for both regression and classificaiton. Caret interfaces with package "nnet" to provide a classification neural net with 1 hidden layer.
+
+We configure Caret to use repeated cross validation to learn the best value of the hidden layer size and regularization parameter. Since 3 sizes and 3 regularization parameters are considered, this means we are selecting among 9 possible models. For the size parameter, we are somewhat limited by the maximum number of weights allowed by "nnet" - an error occurs for size > 11, and we need at least as many hidden units as output nodes, so size >= 5.
+
+We also configure Caret to preprocess the data by centering and scaling (also known as normalizing the data), since this is an important step to speed up coefficient learning in neural nets.
+
+```{r cachedChunk, cache=TRUE, results = 'hide'}
+fitControl <- trainControl(method = "repeatedcv", 
+                           number = 5,
+                           repeats = 5,
+                           classProbs = TRUE)
+
+# Specifies the model parameters to be learned from cross validation
+# nnet gives a neural network with a single hidden layer of "size" elements
+# decay is the regularization parameter
+nnetGrid = expand.grid(size =  c(6,8,10),
+                       decay = c(0.001, 0.01, 0.1)
+                       )
+
+nn_model <- train(classe ~ ., data = data.train, method = "nnet",
+                  metric = "Accuracy",
+                  preProcess = c("center", "scale"),
+                  trControl = fitControl,
+                  tuneGrid = nnetGrid)
+
+```
+
+## Evaluation
+
+Having trained multiple models, and used cross-validation to select the best one, we can evaluate the results in terms of in-sample and out-of-sample error.
+
+### In-Sample Error
+
+```{r}
+result.train <- predict(nn_model, data.train)
+confusionMatrix(result.train, data.train$classe)
+```
+
+The in-sample accuracy is 96.7%. Error is 3.3%.
+
+### Out-of-Sample Error
+
+We estimate out-of-sample accuracy and error by using the data held out from training.
+
+```{r}
+result.test <- predict(nn_model, data.test)
+confusionMatrix(result.test, data.test$classe)
+```
+
+The out-of-sample accuracy is 95.3% (error of 4.7%).
+
+### Quiz Assessment
+
+For this project, we also have unlabeled data used for quiz purposes. In order to avoid exposing the quiz answers, we merely state that the above model was able to accurately predict the exercise class for 17 of 20 entries in this additional dataset. This gives an estimated accuracy of 85%, which is somewhat lower than the out-of-sample result estimated above.
+
+## Conclusions
+
+In this project, we demonstrated that it was possible to learn models capable of detecting variations in how a person exercises, based on accelerometer data taken from their body in various places. Using a relatively simple neural network with 1 hidden layer of 10 units, we were able to achieve out-of-sample accuracy of approximately 95%.
